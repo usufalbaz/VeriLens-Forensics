@@ -56,14 +56,14 @@ Rather than evaluating global averages, the engine segments the spectrum into $K
 - [x] **Phase 1: Frequency Forensics Engine**
   - [x] Dynamic spatial scaling & 2D-FFT extraction.
   - [x] Azimuthal radial integration & high-frequency ratio benchmarking.
-- [ ] **Phase 2: Spatial & Compression Forensics**
-  - [ ] Error Level Analysis (ELA) with dynamic scale quantization.
-  - [ ] Forensic heatmap mask generation for spatial tampering localization.
-- [ ] **Phase 3: Metadata & Provenance Engine**
-  - [ ] EXIF tag validation & AI tool signature parsing (C2PA / Generative chunks).
-- [ ] **Phase 4: Unified Classifier Training**
-  - [ ] Benchmark training on 140k real & synthetic facial samples.
-  - [ ] Export to quantized ONNX for ultra-low latency inference.
+- [x] **Phase 2: Spatial & Compression Forensics**
+  - [x] Error Level Analysis (ELA) with dynamic scale quantization.
+  - [x] Forensic heatmap mask generation for spatial tampering localization.
+- [x] **Phase 3: Metadata & Provenance Engine**
+  - [x] EXIF tag validation & AI tool signature parsing (C2PA / Generative chunks).
+- [x] **Phase 4: Unified Classifier Training**
+  - [x] Benchmark training on 140k real & synthetic facial samples.
+  - [x] Export to quantized ONNX for ultra-low latency inference.
 - [ ] **Phase 5: Production Deployment**
   - [ ] Containerized FastAPI backend microservice.
   - [ ] Interactive Next.js web application deployed to Vercel.
