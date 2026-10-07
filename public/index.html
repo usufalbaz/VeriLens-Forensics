@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>VeriLens Forensics | Digital Media Integrity Platform</title>
-    <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
     <style>
@@ -14,7 +13,6 @@
 </head>
 <body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col justify-between antialiased selection:bg-cyan-500 selection:text-white">
 
-    <!-- Header Navigation -->
     <header class="border-b border-slate-800 bg-slate-900/60 backdrop-blur sticky top-0 z-50 py-3.5 px-6">
         <div class="max-w-6xl mx-auto flex items-center justify-between">
             <div class="flex items-center gap-3">
@@ -35,10 +33,8 @@
         </div>
     </header>
 
-    <!-- Main Viewport -->
     <main class="max-w-4xl mx-auto px-4 py-10 w-full flex-grow">
         
-        <!-- Hero Section -->
         <div class="text-center mb-8">
             <h2 class="text-2xl md:text-3xl font-bold text-white tracking-tight">Multi-Engine Image Forensics Suite</h2>
             <p class="text-slate-400 text-sm max-w-xl mx-auto mt-2">
@@ -46,7 +42,6 @@
             </p>
         </div>
 
-        <!-- Drag & Drop Upload Zone -->
         <div class="bg-slate-900/40 border border-dashed border-slate-800 hover:border-cyan-500/40 transition rounded-xl p-10 text-center cursor-pointer relative" id="drop-area">
             <input type="file" id="file-input" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer" accept="image/*">
             <div class="flex flex-col items-center justify-center gap-3 pointer-events-none">
@@ -62,15 +57,12 @@
             </div>
         </div>
 
-        <!-- Loading State -->
         <div id="loader" class="hidden mt-8 text-center py-6">
             <div class="inline-block animate-spin rounded-full h-8 w-8 border-2 border-cyan-500 border-t-transparent mb-3"></div>
             <p class="text-xs font-mono text-cyan-400 uppercase tracking-wider animate-pulse">Running Fourier Decomposition & Spatial Telemetry...</p>
         </div>
 
-        <!-- Forensic Diagnostics Output -->
         <div id="results" class="hidden mt-8 bg-slate-900/60 border border-slate-800 rounded-xl p-6 shadow-xl">
-            <!-- Verdict Header -->
             <div class="flex flex-col md:flex-row md:items-center justify-between border-b border-slate-800 pb-4 mb-6 gap-4">
                 <div>
                     <span class="text-xs font-mono uppercase text-slate-500 tracking-wider">Diagnostic Verdict</span>
@@ -82,9 +74,7 @@
                 </div>
             </div>
 
-            <!-- Heatmaps Grid -->
             <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <!-- 2D-FFT Spectrum -->
                 <div class="bg-slate-950 p-4 rounded-lg border border-slate-800/80">
                     <div class="flex items-center justify-between mb-2">
                         <span class="text-xs font-semibold text-slate-300">2D-FFT Spectral Dispersion</span>
@@ -94,7 +84,6 @@
                     <p class="text-[11px] text-slate-500 mt-2">Visualizes anomalous high-frequency grid artifacts typical of generative upsampling architectures.</p>
                 </div>
 
-                <!-- ELA Mask -->
                 <div class="bg-slate-950 p-4 rounded-lg border border-slate-800/80">
                     <div class="flex items-center justify-between mb-2">
                         <span class="text-xs font-semibold text-slate-300">Error Level Analysis (ELA)</span>
@@ -108,12 +97,10 @@
 
     </main>
 
-    <!-- Footer -->
     <footer class="border-t border-slate-900 py-6 text-center text-xs font-mono text-slate-600">
         VeriLens Forensics &bull; Open-Access Multimedia Authentication Framework &bull; MIT License
     </footer>
 
-    <!-- Logic Controller -->
     <script>
         const fileInput = document.getElementById('file-input');
         const loader = document.getElementById('loader');
@@ -138,7 +125,12 @@
                     method: 'POST',
                     body: formData
                 });
+                
                 const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.detail || 'Inspection server error: ' + response.status);
+                }
 
                 loader.classList.add('hidden');
                 results.classList.remove('hidden');
@@ -154,13 +146,13 @@
                     verdictText.className = 'text-xl font-bold font-mono text-amber-400';
                 }
 
-                confidenceScore.textContent = data.confidence + '%';
-                fftHeatmap.src = data.visualizations.fft_heatmap_url;
-                tamperingHeatmap.src = data.visualizations.tampering_mask_url;
+                confidenceScore.textContent = (data.confidence || 0) + '%';
+                fftHeatmap.src = data.visualizations?.fft_heatmap_url || '';
+                tamperingHeatmap.src = data.visualizations?.tampering_mask_url || '';
 
             } catch (err) {
                 loader.classList.add('hidden');
-                alert('Inspection service encountered a communication failure. Verify server status.');
+                alert(err.message || 'Inspection service encountered a communication failure. Verify server status.');
             }
         });
     </script>
