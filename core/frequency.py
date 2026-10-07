@@ -7,6 +7,7 @@ via 2D Fast Fourier Transform (FFT).
 from typing import Dict, Any, Union
 import numpy as np
 import cv2
+from PIL import Image
 
 
 class FrequencyEngine:
@@ -19,17 +20,24 @@ class FrequencyEngine:
         self.target_size = target_size
         self.num_bands = num_bands
 
-    def extract_features(self, image_input: Union[str, np.ndarray]) -> Dict[str, Any]:
+    def extract_features(self, image_input: Union[str, np.ndarray, Image.Image]) -> Dict[str, Any]:
         """
         Processes an image and extracts radial frequency metrics and a visual FFT heatmap.
+        Supports filepaths, numpy arrays, and PIL Images safely.
         """
         if isinstance(image_input, str):
             img = cv2.imread(image_input)
             if img is None:
                 raise ValueError(f"Could not load image from path: {image_input}")
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        else:
+        elif isinstance(image_input, Image.Image):
+            img = np.array(image_input.convert('RGB'))
+        elif isinstance(image_input, np.ndarray):
             img = image_input.copy()
+            if len(img.shape) == 2:
+                img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+        else:
+            raise TypeError("Unsupported image input type for FrequencyEngine.")
 
         # Resize and convert to grayscale for uniform spectral density
         img_resized = cv2.resize(img, self.target_size)
@@ -85,4 +93,4 @@ class FrequencyEngine:
             "hf_energy_ratio": hf_energy_ratio,
             "mean_variance": float(np.mean(radial_std)),
             "heatmap": heatmap_rgb,
-      }
+        }
