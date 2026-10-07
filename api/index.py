@@ -41,6 +41,7 @@ def array_to_base64_png(img_array: np.ndarray) -> str:
 
 
 @app.get("/")
+@app.get("/api")
 def health_check():
     return {
         "status": "online",
@@ -50,6 +51,8 @@ def health_check():
     }
 
 
+# Route supported both directly and via Vercel rewrites
+@app.post("/scan")
 @app.post("/api/scan")
 async def scan_image(file: UploadFile = File(...)):
     if not file.content_type.startswith("image/"):
@@ -57,14 +60,10 @@ async def scan_image(file: UploadFile = File(...)):
 
     try:
         image_bytes = await file.read()
-        
-        # Open raw PIL Image preserving EXIF metadata and info chunks
         pil_image = Image.open(io.BytesIO(image_bytes))
 
-        # Execute multi-layered forensic inspection
         report = pipeline.analyze(pil_image)
 
-        # Encode visualizations to base64
         fft_heatmap_b64 = array_to_base64_png(report["visualizations"]["fft_spectrum_heatmap"])
         tampering_mask_b64 = array_to_base64_png(report["visualizations"]["tampering_mask"])
 
