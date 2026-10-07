@@ -5,6 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Framework](https://img.shields.io/badge/Architecture-Hybrid%20Forensics-red.svg)]()
 [![Status](https://img.shields.io/badge/Release-v1.0--Production-emerald.svg)]()
+[![CI Pipeline](https://github.com/usufalbaz/VeriLens-Forensics/actions/workflows/ci.yml/badge.svg)](https://github.com/usufalbaz/VeriLens-Forensics/actions)
 
 ---
 
