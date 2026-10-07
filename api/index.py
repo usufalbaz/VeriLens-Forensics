@@ -20,7 +20,6 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Enable CORS for external access and Vercel routing
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -29,7 +28,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize pipeline in memory
 pipeline = VeriLensPipeline()
 
 
@@ -48,29 +46,28 @@ def health_check():
         "status": "online",
         "service": "VeriLens Forensics Diagnostic Server",
         "version": "1.0.0",
-        "engines_active": ["2D-FFT", "ELA-Forensics", "Metadata-Provenance"]
+        "engines_active": ["2D-FFT", "ELA-Forensics", "Metadata-Provenance", "Biometric-Verification"]
     }
 
 
 @app.post("/api/scan")
 async def scan_image(file: UploadFile = File(...)):
-    # Validate MIME type
     if not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="Invalid file format. Upload an image file.")
 
     try:
-        # Read uploaded image bytes into PIL
         image_bytes = await file.read()
-        pil_image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
+        
+        # Open raw PIL Image preserving EXIF metadata and info chunks
+        pil_image = Image.open(io.BytesIO(image_bytes))
 
-        # Run multi-layered forensic pipeline
+        # Execute multi-layered forensic inspection
         report = pipeline.analyze(pil_image)
 
-        # Encode heatmaps into base64 images for direct web visualization
+        # Encode visualizations to base64
         fft_heatmap_b64 = array_to_base64_png(report["visualizations"]["fft_spectrum_heatmap"])
         tampering_mask_b64 = array_to_base64_png(report["visualizations"]["tampering_mask"])
 
-        # Construct public JSON payload
         response_data = {
             "status": "success",
             "verdict": report["verdict"],
