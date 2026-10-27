@@ -1,43 +1,74 @@
-"""
-VeriLens Forensics - Cloud Serverless Inference Engine (v1.0)
-FastAPI Backend Interface for Vercel Serverless Hosting.
+
+"""VeriLens Forensics API.
+
+Accepts image uploads and returns forensic indicators.
+The analysis is heuristic and must not be treated as proof of authenticity.
 """
 
-from fastapi import FastAPI, File, UploadFile, HTTPException
+import base64
+import io
+import os
+
+import cv2
+import numpy as np
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-import io
-import base64
-import numpy as np
-import cv2
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 
 from core.pipeline import VeriLensPipeline
 
+
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+ALLOWED_FORMATS = {"JPEG", "PNG", "WEBP", "BMP", "TIFF"}
+
 app = FastAPI(
     title="VeriLens Forensics API",
-    description="Multi-engine forensic detection for AI-synthesized and manipulated imagery.",
-    version="1.0.0"
+    description=(
+        "Image forensic indicators for research and inspection. "
+        "Results are heuristic and are not proof of authenticity."
+    ),
+    version="1.1.0",
 )
+
+allowed_origins = [
+    origin.strip()
+    for origin in os.getenv("VERILENS_ALLOWED_ORIGINS", "*").split(",")
+    if origin.strip()
+]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=allowed_origins or ["*"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
 )
 
 pipeline = VeriLensPipeline()
 
 
-def array_to_base64_png(img_array: np.ndarray) -> str:
-    """Converts a numpy RGB array into a base64 encoded PNG data URI string."""
-    success, encoded_image = cv2.imencode('.png', cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR))
+def array_to_base64_png(image_array: np.ndarray) -> str:
+    """Encode an RGB or grayscale NumPy image as a PNG data URI."""
+    if not isinstance(image_array, np.ndarray) or image_array.size == 0:
+        raise ValueError("Invalid visualization array.")
+
+    if image_array.dtype != np.uint8:
+        image_array = np.clip(image_array, 0, 255).astype(np.uint8)
+
+    if image_array.ndim == 2:
+        image_to_encode = image_array
+    elif image_array.ndim == 3 and image_array.shape[2] == 3:
+        image_to_encode = cv2.cvtColor(image_array, cv2.COLOR_RGB2BGR)
+    else:
+        raise ValueError("Unsupported visualization dimensions.")
+
+    success, encoded = cv2.imencode(".png", image_to_encode)
     if not success:
-        return ""
-    b64_str = base64.b64encode(encoded_image.tobytes()).decode('utf-8')
-    return f"data:image/png;base64,{b64_str}"
+        raise ValueError("Visualization encoding failed.")
+
+    encoded_text = base64.b64encode(encoded.tobytes()).decode("ascii")
+    return f"data:image/png;base64,{encoded_text}"
 
 
 @app.get("/")
@@ -45,40 +76,93 @@ def array_to_base64_png(img_array: np.ndarray) -> str:
 def health_check():
     return {
         "status": "online",
-        "service": "VeriLens Forensics Diagnostic Server",
-        "version": "1.0.0",
-        "engines_active": ["2D-FFT", "ELA-Forensics", "Metadata-Provenance", "Biometric-Verification"]
+        "service": "VeriLens Forensics API",
+        "version": "1.1.0",
+        "analysis_type": "heuristic_forensic_indicators",
+        "authenticity_guaranteed": False,
     }
 
 
-# Route supported both directly and via Vercel rewrites
 @app.post("/scan")
 @app.post("/api/scan")
 async def scan_image(file: UploadFile = File(...)):
-    if not file.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="Invalid file format. Upload an image file.")
+    content_type = (file.content_type or "").lower()
+    if not content_type.startswith("image/"):
+        raise HTTPException(
+            status_code=415,
+            detail="Upload a supported image file.",
+        )
 
     try:
-        image_bytes = await file.read()
-        pil_image = Image.open(io.BytesIO(image_bytes))
+        image_bytes = await file.read(MAX_UPLOAD_BYTES + 1)
 
-        report = pipeline.analyze(pil_image)
+        if not image_bytes:
+            raise HTTPException(status_code=400, detail="The uploaded file is empty.")
 
-        fft_heatmap_b64 = array_to_base64_png(report["visualizations"]["fft_spectrum_heatmap"])
-        tampering_mask_b64 = array_to_base64_png(report["visualizations"]["tampering_mask"])
+        if len(image_bytes) > MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail="Image exceeds the 10 MB upload limit.",
+            )
+
+        try:
+            with Image.open(io.BytesIO(image_bytes)) as probe:
+                if probe.format not in ALLOWED_FORMATS:
+                    raise HTTPException(
+                        status_code=415,
+                        detail="This image format is not supported.",
+                    )
+                probe.verify()
+
+            with Image.open(io.BytesIO(image_bytes)) as source:
+                image = source.convert("RGB")
+
+        except HTTPException:
+            raise
+        except (UnidentifiedImageError, OSError, ValueError):
+            raise HTTPException(
+                status_code=400,
+                detail="The uploaded file is not a valid image.",
+            )
+
+        report = pipeline.analyze(image)
+        visualizations = report.get("visualizations", {})
+
+        fft_heatmap = visualizations.get("fft_spectrum_heatmap")
+        tampering_mask = visualizations.get("tampering_mask")
 
         response_data = {
             "status": "success",
-            "verdict": report["verdict"],
-            "confidence": report["confidence"],
-            "fake_probability": report["fake_probability"],
-            "diagnostics": report["diagnostics"],
+            "verdict": report.get("verdict", "INCONCLUSIVE"),
+            "confidence": report.get("confidence"),
+            "fake_probability": report.get("fake_probability"),
+            "diagnostics": report.get("diagnostics", {}),
             "visualizations": {
-                "fft_heatmap_url": fft_heatmap_b64,
-                "tampering_mask_url": tampering_mask_b64
-            }
+                "fft_heatmap_url": (
+                    array_to_base64_png(fft_heatmap)
+                    if fft_heatmap is not None
+                    else None
+                ),
+                "tampering_mask_url": (
+                    array_to_base64_png(tampering_mask)
+                    if tampering_mask is not None
+                    else None
+                ),
+            },
+            "notice": (
+                "Results are heuristic indicators, not proof that an image "
+                "is authentic, manipulated, or AI-generated."
+            ),
         }
+
         return JSONResponse(content=response_data)
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Diagnostic Pipeline Error: {str(e)}")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail="Image analysis failed. Check server logs for details.",
+        )
+    finally:
+        await file.close()
