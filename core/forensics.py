@@ -1,21 +1,8 @@
 
-"""
-VeriLens Forensics - Advanced Spatial & Compression Analysis Engine.
+from __future__ import annotations
 
-Provides descriptive image-forensics measurements using:
-- JPEG recompression difference (ELA).
-- Spatial anomaly mapping.
-- RGB channel difference statistics.
-- Localized block analysis.
-- Difference distribution statistics.
-- Adaptive visualization thresholds.
-
-All outputs are heuristic indicators.
-They are not proof of manipulation or authenticity.
-"""
-
-import io
 import os
+from pathlib import Path
 from typing import Any, Dict, Union
 
 import cv2
@@ -27,7 +14,12 @@ ImageInput = Union[str, os.PathLike, np.ndarray, Image.Image]
 
 
 class ForensicEngine:
-    """Advanced spatial and compression analysis engine."""
+    """
+    Error Level Analysis and spatial image diagnostics.
+
+    ELA highlights differences introduced by JPEG recompression.
+    These differences are indicators only and do not prove tampering.
+    """
 
     def __init__(
         self,
@@ -38,51 +30,20 @@ class ForensicEngine:
         local_window: int = 15,
     ) -> None:
 
-        if isinstance(quality, bool) or not isinstance(quality, int):
-            raise TypeError("quality must be an integer.")
+        if not isinstance(quality, int) or not 1 <= quality <= 100:
+            raise ValueError("quality must be an integer between 1 and 100.")
 
-        if not 1 <= quality <= 100:
-            raise ValueError("quality must be between 1 and 100.")
+        if scale_factor <= 0:
+            raise ValueError("scale_factor must be greater than zero.")
 
-        if isinstance(scale_factor, bool) or not isinstance(
-            scale_factor, (int, float)
-        ):
-            raise TypeError("scale_factor must be numeric.")
+        if not isinstance(block_grid, int) or not 1 <= block_grid <= 64:
+            raise ValueError("block_grid must be between 1 and 64.")
 
-        if not np.isfinite(scale_factor) or scale_factor <= 0:
-            raise ValueError("scale_factor must be finite and positive.")
+        if not 0 <= anomaly_percentile <= 100:
+            raise ValueError("anomaly_percentile must be between 0 and 100.")
 
-        if (
-            isinstance(block_grid, bool)
-            or not isinstance(block_grid, int)
-            or block_grid < 1
-            or block_grid > 64
-        ):
-            raise ValueError("block_grid must be an integer from 1 to 64.")
-
-        if isinstance(anomaly_percentile, bool) or not isinstance(
-            anomaly_percentile, (int, float)
-        ):
-            raise TypeError("anomaly_percentile must be numeric.")
-
-        if (
-            not np.isfinite(anomaly_percentile)
-            or not 50.0 <= anomaly_percentile <= 100.0
-        ):
-            raise ValueError(
-                "anomaly_percentile must be between 50 and 100."
-            )
-
-        if (
-            isinstance(local_window, bool)
-            or not isinstance(local_window, int)
-            or local_window < 3
-            or local_window > 255
-            or local_window % 2 == 0
-        ):
-            raise ValueError(
-                "local_window must be an odd integer from 3 to 255."
-            )
+        if not isinstance(local_window, int) or local_window < 3:
+            raise ValueError("local_window must be an integer >= 3.")
 
         self.quality = quality
         self.scale_factor = float(scale_factor)
@@ -91,57 +52,8 @@ class ForensicEngine:
         self.local_window = local_window
 
     @staticmethod
-    def _to_uint8(array: np.ndarray) -> np.ndarray:
-        """Validate and convert grayscale or color arrays to uint8."""
-
-        if not isinstance(array, np.ndarray):
-            raise TypeError("Expected a NumPy array.")
-
-        if array.size == 0:
-            raise ValueError("Image array must not be empty.")
-
-        if not (
-            np.issubdtype(array.dtype, np.integer)
-            or np.issubdtype(array.dtype, np.floating)
-        ):
-            raise TypeError("Image array must contain numeric values.")
-
-        if not np.all(np.isfinite(array)):
-            raise ValueError("Image array contains non-finite values.")
-
-        minimum = float(np.min(array))
-        maximum = float(np.max(array))
-
-        if minimum < 0:
-            raise ValueError("Negative image values are not supported.")
-
-        if np.issubdtype(array.dtype, np.integer):
-            if maximum <= 255:
-                return array.astype(np.uint8)
-
-            if array.dtype.itemsize == 2 and maximum <= 65535:
-                scaled = array.astype(np.float32) / 65535.0
-                return np.clip(
-                    np.rint(scaled * 255.0), 0, 255
-                ).astype(np.uint8)
-
-            raise ValueError("Unsupported integer image range.")
-
-        if maximum <= 1.0:
-            array = array.astype(np.float32) * 255.0
-        elif maximum <= 255.0:
-            array = array.astype(np.float32)
-        else:
-            raise ValueError(
-                "Floating-point images must be in [0, 1] or [0, 255]."
-            )
-
-        return np.clip(np.rint(array), 0, 255).astype(np.uint8)
-
-
-    @staticmethod
     def _load_image(image_input: ImageInput) -> Image.Image:
-        """Convert supported inputs into an independent RGB image."""
+        """Load supported image inputs and return an independent RGB image."""
 
         if isinstance(image_input, (str, os.PathLike)):
             path = os.fspath(image_input)
@@ -150,12 +62,12 @@ class ForensicEngine:
                 raise FileNotFoundError(f"Image not found: {path}")
 
             with Image.open(path) as source:
-                image = ImageOps.exif_transpose(source)
-                return image.convert("RGB").copy()
+                corrected = ImageOps.exif_transpose(source)
+                return corrected.convert("RGB").copy()
 
         if isinstance(image_input, Image.Image):
-            image = ImageOps.exif_transpose(image_input)
-            return image.convert("RGB").copy()
+            corrected = ImageOps.exif_transpose(image_input)
+            return corrected.convert("RGB").copy()
 
         if isinstance(image_input, np.ndarray):
             array = np.asarray(image_input)
@@ -171,9 +83,11 @@ class ForensicEngine:
 
             if array.ndim == 2:
                 pass
+
             elif array.ndim == 3 and array.shape[2] in (1, 3, 4):
                 if array.shape[2] == 1:
                     array = array[:, :, 0]
+
             else:
                 raise ValueError("Unsupported image array shape.")
 
@@ -190,343 +104,336 @@ class ForensicEngine:
                 return Image.fromarray(array).convert("RGB")
 
             if array.shape[2] == 3:
-                return Image.fromarray(array, mode="RGB").copy()
+                return Image.fromarray(array).convert("RGB")
 
             if array.shape[2] == 4:
                 return Image.fromarray(array, mode="RGBA").convert("RGB")
 
         raise TypeError("Unsupported image input type.")
 
-            # NumPy color arrays are interpreted as RGB.
-            return Image.fromarray(array, mode="RGB").copy()
-
-        raise TypeError(
-            "Expected a file path, NumPy array, or PIL Image instance."
-        )
-
     @staticmethod
-    def _calculate_statistics(
-        values: np.ndarray,
-    ) -> Dict[str, float]:
-        """Calculate descriptive statistics for numeric values."""
+    def _statistics(values: np.ndarray) -> Dict[str, float]:
+        """Calculate descriptive statistics for a numeric array."""
 
-        data = np.asarray(values, dtype=np.float64)
+        values = np.asarray(values, dtype=np.float32)
 
-        if data.size == 0:
+        if values.size == 0:
             return {
                 "mean": 0.0,
                 "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
                 "median": 0.0,
-                "minimum": 0.0,
-                "maximum": 0.0,
-                "p90": 0.0,
-                "p95": 0.0,
-                "p99": 0.0,
             }
 
         return {
-            "mean": float(np.mean(data)),
-            "std": float(np.std(data)),
-            "median": float(np.median(data)),
-            "minimum": float(np.min(data)),
-            "maximum": float(np.max(data)),
-            "p90": float(np.percentile(data, 90)),
-            "p95": float(np.percentile(data, 95)),
-            "p99": float(np.percentile(data, 99)),
+            "mean": float(np.mean(values)),
+            "std": float(np.std(values)),
+            "min": float(np.min(values)),
+            "max": float(np.max(values)),
+            "median": float(np.median(values)),
         }
-
-    def _analyze_channels(
-        self,
-        difference: np.ndarray,
-    ) -> Dict[str, Any]:
-        """Analyze JPEG difference statistics independently per RGB channel."""
-
-        names = ("red", "green", "blue")
-        results = {}
-
-        for index, name in enumerate(names):
-            results[name] = self._calculate_statistics(
-                difference[:, :, index]
-            )
-
-        return results
 
     def _analyze_blocks(
         self,
-        difference_gray: np.ndarray,
+        difference: np.ndarray,
     ) -> Dict[str, Any]:
-        """Measure spatial difference statistics in image blocks."""
+        """Analyze ELA intensity across spatial image blocks."""
 
-        height, width = difference_gray.shape
+        height, width = difference.shape[:2]
+
         grid = self.block_grid
+        y_edges = np.linspace(0, height, grid + 1, dtype=int)
+        x_edges = np.linspace(0, width, grid + 1, dtype=int)
 
-        row_edges = np.linspace(
-            0, height, grid + 1, dtype=np.int32
-        )
-        col_edges = np.linspace(
-            0, width, grid + 1, dtype=np.int32
-        )
-
+        blocks = []
         block_means = []
-        block_stds = []
-        block_maxima = []
-
-        block_details = []
 
         for row in range(grid):
-            for col in range(grid):
-                y1, y2 = row_edges[row], row_edges[row + 1]
-                x1, x2 = col_edges[col], col_edges[col + 1]
+            for column in range(grid):
+                y1 = int(y_edges[row])
+                y2 = int(y_edges[row + 1])
+                x1 = int(x_edges[column])
+                x2 = int(x_edges[column + 1])
 
-                block = difference_gray[y1:y2, x1:x2]
+                region = difference[y1:y2, x1:x2]
 
-                if block.size == 0:
-                    mean_value = 0.0
-                    std_value = 0.0
-                    max_value = 0.0
+                if region.size == 0:
+                    mean_error = 0.0
+                    std_error = 0.0
                 else:
-                    mean_value = float(np.mean(block))
-                    std_value = float(np.std(block))
-                    max_value = float(np.max(block))
+                    mean_error = float(np.mean(region))
+                    std_error = float(np.std(region))
 
-                block_means.append(mean_value)
-                block_stds.append(std_value)
-                block_maxima.append(max_value)
+                block_means.append(mean_error)
 
-                block_details.append({
+                blocks.append({
                     "row": row,
-                    "column": col,
-                    "x_start": int(x1),
-                    "y_start": int(y1),
-                    "x_end": int(x2),
-                    "y_end": int(y2),
-                    "mean_error": mean_value,
-                    "std_error": std_value,
-                    "max_error": max_value,
+                    "column": column,
+                    "bounding_box": [x1, y1, x2 - x1, y2 - y1],
+                    "mean_error": mean_error,
+                    "std_error": std_error,
                 })
 
+        if block_means:
+            highest_index = int(np.argmax(block_means))
+            highest_block = blocks[highest_index]
+        else:
+            highest_index = None
+            highest_block = None
+
         return {
-            "grid_size": grid,
-            "block_count": len(block_details),
-            "mean_error_grid": np.asarray(
-                block_means,
-                dtype=np.float32,
-            ).reshape(grid, grid).tolist(),
-            "std_error_grid": np.asarray(
-                block_stds,
-                dtype=np.float32,
-            ).reshape(grid, grid).tolist(),
-            "max_error_grid": np.asarray(
-                block_maxima,
-                dtype=np.float32,
-            ).reshape(grid, grid).tolist(),
-            "blocks": block_details,
-            "highest_mean_error_block": (
-                int(np.argmax(block_means))
-                if block_means else None
+            "grid_size": [grid, grid],
+            "blocks": blocks,
+            "block_mean_statistics": self._statistics(
+                np.asarray(block_means, dtype=np.float32)
             ),
+            "highest_mean_error_block": highest_block,
+            "highest_mean_error_block_index": highest_index,
         }
 
-    def _create_spatial_maps(
+    def _analyze_local_statistics(
         self,
-        difference_gray: np.ndarray,
-    ) -> Dict[str, np.ndarray]:
-        """Create raw, locally averaged, and visualization maps."""
+        difference: np.ndarray,
+    ) -> Dict[str, Any]:
+        """Calculate local mean and standard deviation maps."""
 
-        raw_map = difference_gray.astype(np.float32)
+        gray = cv2.cvtColor(difference, cv2.COLOR_RGB2GRAY)
+
+        window = self.local_window
+
+        if window % 2 == 0:
+            window += 1
+
+        gray_float = gray.astype(np.float32)
 
         local_mean = cv2.boxFilter(
-            raw_map,
+            gray_float,
             ddepth=-1,
-            ksize=(self.local_window, self.local_window),
+            ksize=(window, window),
             normalize=True,
             borderType=cv2.BORDER_REFLECT,
         )
 
-        local_squared_mean = cv2.boxFilter(
-            np.square(raw_map),
+        local_mean_square = cv2.boxFilter(
+            gray_float * gray_float,
             ddepth=-1,
-            ksize=(self.local_window, self.local_window),
+            ksize=(window, window),
             normalize=True,
             borderType=cv2.BORDER_REFLECT,
         )
 
-        local_variance = np.maximum(
-            local_squared_mean - np.square(local_mean),
+        variance = np.maximum(
+            local_mean_square - local_mean * local_mean,
             0.0,
         )
 
-        local_std = np.sqrt(local_variance)
+        local_std = np.sqrt(variance)
 
-        # This is a visualization map, not a calibrated anomaly score.
-        visualization_map = np.clip(
-            local_mean * self.scale_factor,
+        return {
+            "local_mean_map": local_mean,
+            "local_std_map": local_std,
+            "window_size": window,
+            "mean_statistics": self._statistics(local_mean),
+            "std_statistics": self._statistics(local_std),
+        }
+
+    def _build_anomaly_mask(
+        self,
+        difference: np.ndarray,
+    ) -> Dict[str, Any]:
+        """Create a percentile-based exploratory anomaly mask."""
+
+        gray = cv2.cvtColor(difference, cv2.COLOR_RGB2GRAY)
+
+        threshold = float(
+            np.percentile(gray, self.anomaly_percentile)
+        )
+
+        mask = (gray > threshold).astype(np.uint8) * 255
+
+        total_pixels = int(mask.size)
+        anomaly_pixels = int(np.count_nonzero(mask))
+
+        anomaly_ratio = (
+            anomaly_pixels / total_pixels
+            if total_pixels > 0
+            else 0.0
+        )
+
+        return {
+            "anomaly_mask": mask,
+            "threshold": threshold,
+            "percentile": self.anomaly_percentile,
+            "anomaly_pixels": anomaly_pixels,
+            "total_pixels": total_pixels,
+            "anomaly_pixel_ratio": float(anomaly_ratio),
+        }
+
+    @staticmethod
+    def _create_heatmap(
+        difference: np.ndarray,
+        scale_factor: float,
+    ) -> np.ndarray:
+        """Generate an RGB visualization of amplified ELA differences."""
+
+        amplified = np.clip(
+            difference.astype(np.float32) * scale_factor,
             0,
             255,
         ).astype(np.uint8)
 
-        heatmap_bgr = cv2.applyColorMap(
-            visualization_map,
+        gray = cv2.cvtColor(amplified, cv2.COLOR_RGB2GRAY)
+
+        colored = cv2.applyColorMap(
+            gray,
             cv2.COLORMAP_JET,
         )
 
-        heatmap_rgb = cv2.cvtColor(
-            heatmap_bgr,
-            cv2.COLOR_BGR2RGB,
-        )
-
-        return {
-            "raw_difference_map": difference_gray,
-            "local_mean_map": local_mean,
-            "local_std_map": local_std,
-            "visualization_map": visualization_map,
-            "heatmap": heatmap_rgb,
-        }
+        return cv2.cvtColor(colored, cv2.COLOR_BGR2RGB)
 
     def analyze_ela(
         self,
         image_input: ImageInput,
     ) -> Dict[str, Any]:
         """
-        Perform ELA and extended spatial compression analysis.
+        Perform JPEG Error Level Analysis.
 
-        Returns the historical ELA fields and additional diagnostics.
+        Returned scores are exploratory measurements, not probabilities
+        of manipulation or calibrated authenticity scores.
         """
 
         original = self._load_image(image_input)
 
-        width, height = original.size
-
-        if width < 2 or height < 2:
-            raise ValueError("Image dimensions must be at least 2x2.")
-
-        buffer = io.BytesIO()
-
-        try:
-            original.save(
-                buffer,
-                format="JPEG",
-                quality=self.quality,
-                subsampling=0,
-                optimize=False,
-            )
-
-            buffer.seek(0)
-
-            with Image.open(buffer) as recompressed_image:
-                recompressed = recompressed_image.convert(
-                    "RGB"
-                ).copy()
-
-        finally:
-            buffer.close()
-
-        if original.size != recompressed.size:
-            raise RuntimeError(
-                "Recompressed image dimensions changed unexpectedly."
-            )
-
-        difference = ImageChops.difference(
+        original_array = np.asarray(
             original,
-            recompressed,
-        )
-
-        difference_array = np.asarray(
-            difference,
             dtype=np.uint8,
         )
 
-        difference_gray = cv2.cvtColor(
-            difference_array,
-            cv2.COLOR_RGB2GRAY,
+        height, width = original_array.shape[:2]
+
+        if height < 1 or width < 1:
+            raise ValueError("Image dimensions are invalid.")
+
+        from io import BytesIO
+
+        buffer = BytesIO()
+
+        original.save(
+            buffer,
+            format="JPEG",
+            quality=self.quality,
+            optimize=False,
         )
 
-        # All core measurements use unamplified difference data.
-        overall_statistics = self._calculate_statistics(
-            difference_gray
+        buffer.seek(0)
+
+        with Image.open(buffer) as compressed_image:
+            compressed = compressed_image.convert("RGB").copy()
+
+        difference_image = ImageChops.difference(
+            original,
+            compressed,
         )
 
-        mean_error = overall_statistics["mean"]
-        std_error = overall_statistics["std"]
-        max_error = overall_statistics["maximum"]
+        difference = np.asarray(
+            difference_image,
+            dtype=np.uint8,
+        )
 
-        # Retain the legacy score for API compatibility.
+        difference_float = difference.astype(np.float32)
+
+        mean_error = float(np.mean(difference_float))
+        std_error = float(np.std(difference_float))
+        max_error = float(np.max(difference_float))
+
+        # This is an uncalibrated descriptive score, not a probability.
         anomaly_score = float(
             np.clip((std_error / 50.0) * 100.0, 0.0, 100.0)
         )
 
-        spatial_maps = self._create_spatial_maps(
-            difference_gray
-        )
+        channel_statistics = {}
 
-        threshold = float(
-            np.percentile(
-                difference_gray,
-                self.anomaly_percentile,
+        channel_names = ("red", "green", "blue")
+
+        for index, channel_name in enumerate(channel_names):
+            channel_statistics[channel_name] = self._statistics(
+                difference_float[:, :, index]
             )
-        )
 
-        anomaly_mask = (
-            difference_gray > threshold
-        ).astype(np.uint8) * 255
-
-        anomalous_pixel_ratio = float(
-            np.mean(anomaly_mask > 0)
-        )
-
-        channel_statistics = self._analyze_channels(
-            difference_array
+        overall_statistics = self._statistics(
+            difference_float
         )
 
         block_analysis = self._analyze_blocks(
-            difference_gray
+            difference_float
         )
 
-        local_statistics = {
-            "local_mean": self._calculate_statistics(
-                spatial_maps["local_mean_map"]
-            ),
-            "local_std": self._calculate_statistics(
-                spatial_maps["local_std_map"]
-            ),
-        }
+        local_analysis = self._analyze_local_statistics(
+            difference
+        )
 
-        # Preserve the legacy key "tampering_mask".
-        # It remains an RGB heatmap for compatibility.
+        threshold_analysis = self._build_anomaly_mask(
+            difference
+        )
+
+        heatmap = self._create_heatmap(
+            difference,
+            self.scale_factor,
+        )
+
         return {
+            # Legacy-compatible fields
             "mean_error": mean_error,
             "std_error": std_error,
             "max_error": max_error,
             "anomaly_score": anomaly_score,
-            "tampering_mask": spatial_maps["heatmap"],
+            "tampering_mask": heatmap,
 
-            "raw_difference_map": spatial_maps[
-                "raw_difference_map"
-            ],
-            "heatmap": spatial_maps["heatmap"],
-            "anomaly_mask": anomaly_mask,
-            "local_mean_map": spatial_maps["local_mean_map"],
-            "local_std_map": spatial_maps["local_std_map"],
+            # Explicit score interpretation
+            "score_type": "uncalibrated_heuristic",
+            "verdict": "INCONCLUSIVE",
 
+            # ELA data
+            "raw_difference_map": difference,
+            "heatmap": heatmap,
+
+            # Statistical analysis
             "overall_statistics": overall_statistics,
             "channel_statistics": channel_statistics,
+
+            # Spatial analysis
             "block_analysis": block_analysis,
-            "local_statistics": local_statistics,
+            "local_statistics": {
+                "window_size": local_analysis["window_size"],
+                "mean_statistics": local_analysis["mean_statistics"],
+                "std_statistics": local_analysis["std_statistics"],
+            },
+            "local_mean_map": local_analysis["local_mean_map"],
+            "local_std_map": local_analysis["local_std_map"],
 
+            # Threshold analysis
+            "anomaly_mask": threshold_analysis["anomaly_mask"],
             "threshold_analysis": {
-                "percentile": self.anomaly_percentile,
-                "threshold_value": threshold,
-                "anomalous_pixel_ratio": anomalous_pixel_ratio,
-                "threshold_type": "image_relative_percentile",
+                "threshold": threshold_analysis["threshold"],
+                "percentile": threshold_analysis["percentile"],
+                "anomaly_pixels": threshold_analysis["anomaly_pixels"],
+                "total_pixels": threshold_analysis["total_pixels"],
+                "anomaly_pixel_ratio": threshold_analysis[
+                    "anomaly_pixel_ratio"
+                ],
             },
 
+            # Image information
             "image_metadata": {
-                "width": width,
-                "height": height,
-                "mode": "RGB",
-                "pixel_count": width * height,
+                "width": int(width),
+                "height": int(height),
+                "channels": 3,
+                "format": original.format or "unknown",
+                "mode": original.mode,
             },
 
+            # Configuration
             "configuration": {
                 "jpeg_quality": self.quality,
                 "scale_factor": self.scale_factor,
@@ -535,21 +442,16 @@ class ForensicEngine:
                 "local_window": self.local_window,
             },
 
-            "analysis_method": (
-                "JPEG recompression difference with spatial diagnostics"
-            ),
-            "score_type": "Uncalibrated heuristic anomaly score",
+            "analysis_method": "jpeg_error_level_analysis",
 
             "limitations": [
-                "ELA differences do not prove image manipulation.",
-                "JPEG quality and compression history affect the result.",
-                "Image content and texture can create non-uniform differences.",
-                "The percentile mask is relative to the analyzed image.",
-                "Block statistics do not identify the cause of an anomaly.",
-                "Channel differences may reflect normal color and compression behavior.",
-                "The heatmap visualizes compression differences, not confirmed edits.",
-                "This method is not a standalone AI-image detector.",
-                "The anomaly score is not a probability.",
+                "ELA does not independently prove image manipulation.",
+                "JPEG recompression can create differences in authentic images.",
+                "Different image histories can produce different ELA patterns.",
+                "Resizing, editing, and compression affect the measurements.",
+                "The anomaly score is not a calibrated probability.",
+                "The anomaly mask is a threshold visualization, not a verified tampering mask.",
+                "Authenticity requires multiple independent forensic signals.",
             ],
         }
 
@@ -557,6 +459,6 @@ class ForensicEngine:
         self,
         image_input: ImageInput,
     ) -> Dict[str, Any]:
-        """Run the complete spatial and compression analysis."""
+        """Compatibility alias for the ELA analysis method."""
 
         return self.analyze_ela(image_input)
