@@ -138,6 +138,7 @@ class ForensicEngine:
 
         return np.clip(np.rint(array), 0, 255).astype(np.uint8)
 
+
     @staticmethod
     def _load_image(image_input: ImageInput) -> Image.Image:
         """Convert supported inputs into an independent RGB image."""
@@ -153,41 +154,48 @@ class ForensicEngine:
                 return image.convert("RGB").copy()
 
         if isinstance(image_input, Image.Image):
-            image = ImageOps.exif_transpose(image)
+            image = ImageOps.exif_transpose(image_input)
             return image.convert("RGB").copy()
 
         if isinstance(image_input, np.ndarray):
-            if image_input.ndim not in (2, 3):
-                raise ValueError(
-                    "Expected a grayscale or color image array."
-                )
+            array = np.asarray(image_input)
 
-            if image_input.ndim == 3 and image_input.shape[2] not in (
-                1, 3, 4
-            ):
-                raise ValueError(
-                    "Expected 1, 3, or 4 image channels."
-                )
+            if array.size == 0:
+                raise ValueError("Image array is empty.")
 
-            array = ForensicEngine._to_uint8(image_input)
+            if not np.issubdtype(array.dtype, np.number):
+                raise TypeError("Image array must contain numeric values.")
 
-            if array.ndim == 3 and array.shape[2] == 1:
-                array = array[:, :, 0]
+            if not np.isfinite(array).all():
+                raise ValueError("Image array contains non-finite values.")
+
+            if array.ndim == 2:
+                pass
+            elif array.ndim == 3 and array.shape[2] in (1, 3, 4):
+                if array.shape[2] == 1:
+                    array = array[:, :, 0]
+            else:
+                raise ValueError("Unsupported image array shape.")
+
+            if np.issubdtype(array.dtype, np.floating):
+                if array.min() >= 0.0 and array.max() <= 1.0:
+                    array = array * 255.0
+
+            elif array.dtype == np.uint16:
+                array = array.astype(np.float32) * (255.0 / 65535.0)
+
+            array = np.clip(array, 0, 255).astype(np.uint8)
 
             if array.ndim == 2:
                 return Image.fromarray(array).convert("RGB")
 
+            if array.shape[2] == 3:
+                return Image.fromarray(array, mode="RGB").copy()
+
             if array.shape[2] == 4:
-                rgba = Image.fromarray(array, mode="RGBA")
-                background = Image.new(
-                    "RGBA",
-                    rgba.size,
-                    (255, 255, 255, 255),
-                )
-                return Image.alpha_composite(
-                    background,
-                    rgba,
-                ).convert("RGB")
+                return Image.fromarray(array, mode="RGBA").convert("RGB")
+
+        raise TypeError("Unsupported image input type.")
 
             # NumPy color arrays are interpreted as RGB.
             return Image.fromarray(array, mode="RGB").copy()
