@@ -2,39 +2,40 @@
 """
 VeriLens Forensics - Unified Forensic Analysis Pipeline.
 
-Coordinates frequency analysis, Error Level Analysis (ELA), metadata
-inspection, and face-related diagnostics into one structured report.
+Coordinates metadata inspection, frequency analysis, Error Level
+Analysis, biometric diagnostics, and optional deepfake inference.
 
 Scientific limitations:
 - Heuristic scores are not calibrated probabilities.
+- Deepfake predictions depend on the model and its training data.
 - Metadata can be absent, altered, or forged.
 - ELA and frequency features are descriptive signals, not proof.
 - Low anomaly scores do not establish authenticity.
-- This pipeline does not independently prove AI generation or manipulation.
+- No single engine independently proves image authenticity.
 """
 
-from typing import Any, Dict, Union
+from pathlib import Path
+from typing import Any, Dict, Optional, Union
 
 import numpy as np
 from PIL import Image
 
 from core.biometrics import BiometricEngine
+from core.deepfake import DeepfakeEngine
 from core.forensics import ForensicEngine
 from core.frequency import FrequencyEngine
 from core.metadata import MetadataEngine
 
 
-ImageInput = Union[str, np.ndarray, Image.Image]
+ImageInput = Union[str, Path, np.ndarray, Image.Image]
 
 
 class VeriLensPipeline:
     """
-    Run the available analysis engines and produce a cautious report.
+    Unified forensic analysis pipeline.
 
-    The legacy `fake_probability` and `confidence` fields are retained
-    for compatibility, but `fake_probability` is explicitly marked as
-    deprecated and `confidence` is None because no calibrated probability
-    model is currently available.
+    Deepfake inference is optional. Its output is reported independently
+    and is not included in the heuristic risk index.
     """
 
     def __init__(
@@ -43,18 +44,27 @@ class VeriLensPipeline:
         num_bands: int = 64,
         ela_quality: int = 90,
         ela_scale_factor: float = 15.0,
+        deepfake_model_path: Optional[str] = None,
+        deepfake_threshold: float = 0.5,
     ) -> None:
-        """Initialize the forensic analysis engines."""
+
         self.freq_engine = FrequencyEngine(
             target_size=target_size,
             num_bands=num_bands,
         )
+
         self.ela_engine = ForensicEngine(
             quality=ela_quality,
             scale_factor=ela_scale_factor,
         )
+
         self.meta_engine = MetadataEngine()
         self.bio_engine = BiometricEngine()
+
+        self.deepfake_engine = DeepfakeEngine(
+            model_path=deepfake_model_path,
+            threshold=deepfake_threshold,
+        )
 
     @staticmethod
     def _finite_number(
@@ -64,12 +74,7 @@ class VeriLensPipeline:
         minimum: float = 0.0,
         maximum: float = 100.0,
     ) -> float:
-        """
-        Convert a value to a bounded finite float.
 
-        Invalid values fall back to a supplied default. This is defensive
-        normalization, not validation of the scientific meaning of a score.
-        """
         try:
             number = float(value)
         except (TypeError, ValueError, OverflowError):
@@ -82,14 +87,14 @@ class VeriLensPipeline:
 
     @staticmethod
     def _validate_image_input(image_input: ImageInput) -> None:
-        """Reject unsupported or obviously invalid image inputs."""
+
         if isinstance(image_input, Image.Image):
             if image_input.width <= 0 or image_input.height <= 0:
                 raise ValueError("Image dimensions must be positive.")
             return
 
-        if isinstance(image_input, str):
-            if not image_input.strip():
+        if isinstance(image_input, (str, Path)):
+            if not str(image_input).strip():
                 raise ValueError("Image path must not be empty.")
             return
 
@@ -113,12 +118,12 @@ class VeriLensPipeline:
             return
 
         raise TypeError(
-            "image_input must be a path string, NumPy array, or PIL Image."
+            "image_input must be a path, NumPy array, or PIL Image."
         )
 
     @staticmethod
     def _normalize_biometric_result(result: Any) -> Dict[str, Any]:
-        """Normalize the biometric engine output to a predictable structure."""
+
         if not isinstance(result, dict):
             raise TypeError("BiometricEngine must return a dictionary.")
 
@@ -133,10 +138,17 @@ class VeriLensPipeline:
 
         normalized = dict(result)
         normalized["faces_detected"] = int(faces_detected)
-        normalized["biometric_risk_score"] = VeriLensPipeline._finite_number(
-            result.get("biometric_risk_score", 0.0)
+
+        normalized["biometric_risk_score"] = (
+            VeriLensPipeline._finite_number(
+                result.get("biometric_risk_score", 0.0)
+            )
         )
-        normalized.setdefault("biometric_verdict", "NOT_ESTABLISHED")
+
+        normalized.setdefault(
+            "biometric_verdict",
+            "NOT_ESTABLISHED",
+        )
         normalized.setdefault("face_details", [])
 
         return normalized
@@ -148,16 +160,7 @@ class VeriLensPipeline:
         biometric_score: float,
         faces_detected: int,
     ) -> Dict[str, Any]:
-        """
-        Build an explicitly uncalibrated heuristic review index.
 
-        Frequency metrics are intentionally excluded: a high-frequency
-        ratio is not inherently suspicious and has no validated mapping
-        to manipulation likelihood.
-
-        The weights below are provisional engineering heuristics. They
-        must not be interpreted as statistically validated weights.
-        """
         if faces_detected > 0:
             score = (
                 metadata_score * 0.40
@@ -165,14 +168,16 @@ class VeriLensPipeline:
                 + biometric_score * 0.20
             )
             weighting_profile = "face_detected_heuristic"
+
         else:
-            score = metadata_score * 0.50 + ela_score * 0.50
+            score = (
+                metadata_score * 0.50
+                + ela_score * 0.50
+            )
             weighting_profile = "no_face_detected_heuristic"
 
         score = float(np.clip(score, 0.0, 100.0))
 
-        # These bands determine review priority only. They do not establish
-        # whether a file is authentic, manipulated, or AI-generated.
         if score >= 65.0:
             review_status = "HIGH_REVIEW_PRIORITY"
         elif score >= 35.0:
@@ -193,44 +198,38 @@ class VeriLensPipeline:
         }
 
     def analyze(self, image_input: ImageInput) -> Dict[str, Any]:
-        """
-        Analyze an image and return a structured diagnostic report.
 
-        Core engine errors are allowed to propagate instead of silently
-        producing a potentially misleading partial verdict. Biometric
-        analysis alone is optional and may be marked as skipped.
-        """
         self._validate_image_input(image_input)
 
-        # 1. Inspect metadata.
+        # 1. Metadata inspection.
         meta_result = self.meta_engine.extract_metadata(image_input)
 
         if not isinstance(meta_result, dict):
             raise TypeError("MetadataEngine must return a dictionary.")
 
-        # 2. Extract descriptive frequency-domain features.
+        # 2. Frequency-domain analysis.
         freq_result = self.freq_engine.extract_features(image_input)
 
         if not isinstance(freq_result, dict):
             raise TypeError("FrequencyEngine must return a dictionary.")
 
-        # 3. Run Error Level Analysis.
+        # 3. Error Level Analysis.
         ela_result = self.ela_engine.analyze_ela(image_input)
 
         if not isinstance(ela_result, dict):
             raise TypeError("ForensicEngine must return a dictionary.")
 
-        # 4. Run optional biometric analysis.
+        # 4. Optional biometric analysis.
         biometric_error = None
 
         try:
             bio_result = self._normalize_biometric_result(
                 self.bio_engine.analyze_faces(image_input)
             )
+
         except Exception as exc:
-            # Keep the report explicit about the failed optional subsystem.
-            # Do not represent a skipped biometric engine as evidence of safety.
             biometric_error = type(exc).__name__
+
             bio_result = {
                 "faces_detected": 0,
                 "biometric_verdict": "SKIPPED_OR_INCOMPATIBLE",
@@ -238,11 +237,32 @@ class VeriLensPipeline:
                 "face_details": [],
             }
 
-        # 5. Normalize numeric outputs before constructing the report.
-        # These are engine-provided heuristic scores, not calibrated
-        # probabilities. The original diagnostic values are preserved below.
-        metadata_score = self._finite_number(meta_result.get("risk_score", 0.0))
-        ela_score = self._finite_number(ela_result.get("anomaly_score", 0.0))
+        # 5. Optional deepfake inference.
+        # An unavailable model must not prevent other engines from running.
+        deepfake_result = self.deepfake_engine.analyze(image_input)
+
+        if not isinstance(deepfake_result, dict):
+            deepfake_result = {
+                "engine": "deepfake",
+                "status": "error",
+                "available": False,
+                "prediction": None,
+                "fake_probability": None,
+                "real_probability": None,
+                "error": "DeepfakeEngine returned an invalid result.",
+            }
+
+        deepfake_status = deepfake_result.get("status", "unknown")
+
+        # 6. Normalize heuristic outputs.
+        metadata_score = self._finite_number(
+            meta_result.get("risk_score", 0.0)
+        )
+
+        ela_score = self._finite_number(
+            ela_result.get("anomaly_score", 0.0)
+        )
+
         biometric_score = self._finite_number(
             bio_result.get("biometric_risk_score", 0.0)
         )
@@ -253,7 +273,9 @@ class VeriLensPipeline:
             maximum=1.0,
         )
 
-        faces_detected = int(bio_result.get("faces_detected", 0))
+        faces_detected = int(
+            bio_result.get("faces_detected", 0)
+        )
 
         review = self._build_risk_index(
             metadata_score=metadata_score,
@@ -262,12 +284,10 @@ class VeriLensPipeline:
             faces_detected=faces_detected,
         )
 
-        # 6. Produce a conservative verdict.
-        #
-        # Metadata labels alone cannot establish AI generation. If the
-        # metadata engine reports a generation indicator, surface that
-        # indicator without upgrading it to proof.
-        metadata_verdict = str(meta_result.get("verdict", "")).upper()
+        # 7. Conservative heuristic verdict.
+        metadata_verdict = str(
+            meta_result.get("verdict", "")
+        ).upper()
 
         if metadata_verdict == "AI_GENERATION_CONFIRMED":
             verdict = "AI_GENERATION_INDICATOR_PRESENT"
@@ -275,18 +295,21 @@ class VeriLensPipeline:
                 "The metadata engine reported a generation indicator. "
                 "This is not independent verification of image origin."
             )
+
         elif review["review_status"] == "HIGH_REVIEW_PRIORITY":
             verdict = "REQUIRES_FORENSIC_REVIEW"
             verdict_basis = (
                 "The provisional heuristic index exceeded the review "
                 "threshold. This does not prove manipulation."
             )
+
         elif review["review_status"] == "REQUIRES_REVIEW":
             verdict = "SUSPICIOUS_INCONCLUSIVE"
             verdict_basis = (
                 "Available heuristic signals warrant review but do not "
                 "establish manipulation or AI generation."
             )
+
         else:
             verdict = "NO_STRONG_HEURISTIC_SIGNAL"
             verdict_basis = (
@@ -294,27 +317,32 @@ class VeriLensPipeline:
                 "establish that the image is authentic or unmodified."
             )
 
-        # 7. Preserve the established report structure for existing clients.
-        #
-        # `confidence` is deliberately None. `fake_probability` is retained
-        # only as a deprecated compatibility alias for the review index.
-        # Consumers should migrate to `risk_index`.
+        # 8. Build the unified report.
         report = {
             "verdict": verdict,
             "confidence": None,
+
+            # Deprecated compatibility field.
             "fake_probability": round(review["risk_index"], 2),
+
             "risk_index": review["risk_index"],
             "score_type": "uncalibrated_heuristic_review_index",
             "verdict_basis": verdict_basis,
+
             "limitations": [
                 "No calibrated manipulation probability is available.",
                 "A low risk index does not prove authenticity.",
                 "Metadata indicators do not independently prove image origin.",
                 "Frequency and ELA features are not standalone proof of tampering.",
                 "Biometric analysis may be unavailable or inconclusive.",
+                "Deepfake predictions depend on the model and its training data.",
+                "An unavailable deepfake model does not imply that an image is real.",
+                "The deepfake output is not included in the heuristic risk index.",
             ],
+
             "diagnostics": {
                 "metadata": meta_result,
+
                 "frequency": {
                     "high_frequency_ratio": round(hf_ratio, 6),
                     "mean_spectral_variance": self._finite_number(
@@ -323,9 +351,11 @@ class VeriLensPipeline:
                         maximum=1_000_000.0,
                     ),
                     "spectral_metrics": freq_result.get(
-                        "spectral_metrics", {}
+                        "spectral_metrics",
+                        {},
                     ),
                 },
+
                 "spatial_forensics": {
                     "mean_error": self._finite_number(
                         ela_result.get("mean_error", 0.0),
@@ -343,8 +373,13 @@ class VeriLensPipeline:
                         "of manipulation."
                     ),
                 },
+
                 "biometrics": bio_result,
+
+                "deepfake": deepfake_result,
+
                 "review": review,
+
                 "engine_status": {
                     "metadata": "completed",
                     "frequency": "completed",
@@ -353,8 +388,10 @@ class VeriLensPipeline:
                         "skipped" if biometric_error else "completed"
                     ),
                     "biometrics_error_type": biometric_error,
+                    "deepfake": deepfake_status,
                 },
             },
+
             "visualizations": {
                 "fft_spectrum_heatmap": freq_result.get("heatmap"),
                 "tampering_mask": ela_result.get("tampering_mask"),
